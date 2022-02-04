@@ -6,60 +6,68 @@ from dash.dependencies import Input, Output
 import plotly.express as px
 import pandas as pd
 import pyodbc 
-# import pymssql
-# geopandas causes problems with dependencies. Installed in geo_env but can't get pymssql to work to.
-import geopandas
+from dataclasses import dataclass
+import datetime as dt
 
 import config
 
-def update_data():
-    try:
-        conn_str = ("Driver={SQL Server};"
-                    "Server=" + config.server + ";"
-                    "Database=" + config.database + ";"
-                    "UID=" + config.user + ";"
-                    "PWD=" + config.password + ";")
-        conn = pyodbc.connect(conn_str)
-        cursor = conn.cursor()
-        df = pd.io.sql.read_sql("SELECT * from pokemondarrellgerber", conn)
-        return 0, df
-    except Exception as e:
-        print(e)
-        return -1, None
+@dataclass
+class DashboardData:
+    df: pd.DataFrame() = None
+    timestamp: dt.datetime = dt.datetime(1970, 1, 1)
     
+    def update_data(self, delay):
+        if dt.datetime.now() - self.timestamp > delay:
+            try:
+                conn_str = ("Driver={SQL Server};"
+                            "Server=" + config.server + ";"
+                            "Database=" + config.database + ";"
+                            "UID=" + config.user + ";"
+                            "PWD=" + config.password + ";")
+                conn = pyodbc.connect(conn_str)
+                cursor = conn.cursor()
+                self.df = pd.io.sql.read_sql("SELECT * from pokemondarrellgerber", conn)
+                self.timestamp = dt.datetime.now()
+            except Exception as e:
+                print(e)
+                df = None
+                
+globalData = DashboardData()
+UpdateDelay = pd.Timedelta(10, unit='m') # seconds    
 
 def create_name_graph():
-    result, df = update_data()
-    if(result == 0):
-        df2 = df['pokename'].value_counts().head(10)
+    globalData.update_data(UpdateDelay)
+    if(globalData.df is not None):
+        df2 = globalData.df['pokename'].value_counts().head(10)
         fig = px.bar(df2)
         return fig
     else:
         return None
     
 def create_location_graph():
-    result, df = update_data()
-    if(result == 0):
-        df2 = df['placename'].value_counts().head(10)
+    globalData.update_data(UpdateDelay)
+    if(globalData.df is not None):
+        df2 = globalData.df['placename'].value_counts().head(10)
         fig = px.bar(df2)
         return fig
     else:
         return None   
     
 
-def create_location_map():
-    result, df = update_data()
-    print(df.shape)
-    print(df.columns)
-    if(result == 0):
-        geoDF = geopandas.GeoDataFrame(
-            df, geometry=geopandas.points_from_xy(df.long, df.lat))
-        print(geoDF.shape)
-        print(geoDF.head())
-        fig = geoDF.plot()
+def create_map():
+    globalData.update_data(UpdateDelay)
+    if(globalData.df is not None):
+        fig = px.scatter_geo(globalData.df,
+                            lat="lat",
+                            lon="long",
+                            hover_name="pokename",
+                             color="pokename",
+                            title="Locations of Pokemon")
+        fig.update_layout(showlegend=False)
         return fig
     else:
         return None
+
     
 app = dash.Dash(__name__)
     
@@ -68,19 +76,25 @@ app.layout = html.Div(children = [
     
     dcc.Graph(
         id='Pokemon-Names',
-        figure = create_name_graph()
+        figure = create_name_graph(),
+        style={
+              'display': 'inline-block', "padding-left": "50px", "padding-bottom": "20px"}
     ),
     dcc.Graph(
         id='Pokemon-Places',
-        figure=create_location_graph()
+        figure=create_location_graph(),
+        style={
+            'display': 'inline-block', "padding-left": "50px", "padding-bottom": "20px"}
     ),
     dcc.Graph(
-        id='Pokemon-map',
-        figure=create_location_map()
+        id="Pokemon-Map",
+        figure=create_map(),
+        style={
+              'display': 'inline-block', "padding-left": "50px", "padding-bottom": "20px"}
     ),
     dcc.Interval(
         id='interval-component',
-        interval = 300*1000,
+        interval = 30*1000,
         n_intervals = 0
     )
 ])    
@@ -88,40 +102,19 @@ app.layout = html.Div(children = [
 @app.callback(Output('Pokemon-Names', 'figure'), 
               Input('interval-component', 'n_intervals'))
 def UpdateNameData(n):
-    result, df = update_data()
-    if(result == 0):
-        df2 = df['pokename'].value_counts().head(10)
-        fig = px.bar(df2)
-        return fig
-    else:
-        return None
+    return create_name_graph()
 
 
 @app.callback(Output('Pokemon-Places', 'figure'),
               Input('interval-component', 'n_intervals'))
 def UpdatePlaceData(n):
-    result, df = update_data()
-    if(result == 0):
-        df2 = df['placename'].value_counts().head(10)
-        fig = px.bar(df2)
-        return fig
-    else:
-        return None
-    
+    return create_location_graph()
 
-@app.callback(Output('Pokemon-map', 'figure'),
+
+@app.callback(Output('Pokemon-Map', 'figure'),
               Input('interval-component', 'n_intervals'))
 def UpdateMapData(n):
-    result, df = update_data()
-    if(result == 0):
-        geoDF = geopandas.GeoDataFrame(
-            df, geometry=geopandas.points_from_xy(df.long, df.lat))
-        print(geoDF.shape)
-        print(geoDF.head())
-        fig = geoDF.plot()
-        return fig
-    else:
-        return None
-
+    return create_map()
+    
 if __name__ == '__main__':
     app.run_server(debug=True)
